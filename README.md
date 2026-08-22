@@ -38,7 +38,30 @@ npm start
 | `DSH_DESKTOP_HOME` | 桌面端使用的 DSH_HOME | `~/.dsh-desktop` |
 | `DSH_CLI` | 手动指定 dsh 入口（`bin.js`、`dsh.cmd` 或 dsh 包目录） | 自动：`where dsh` → npx 缓存兜底 |
 | `DSH_NODE` | 手动指定 node.exe 路径 | 自动：`where node` |
+| `DSH_DESKTOP_DSH` | 覆盖 dsh：优先于内置版本使用外部 dsh（如全局安装的新版） | 内置 dsh |
+| `DSH_DESKTOP_NODE` | 覆盖 node：优先于内置版本使用外部 node.exe | 内置 node |
 | `DSH_DESKTOP_DEVTOOLS` | 设为 `1` 时启动即打开开发者工具 | 关闭 |
+
+> 解析优先级：**显式覆盖（环境变量或设置文件）> 内置（打包版）> 系统（开发模式）**。
+> 除了环境变量，也可以写设置文件 `%APPDATA%\dsh-desktop\settings.json`：
+> ```json
+> { "dshPath": "C:\\Users\\you\\...\\@deepseek-ai\\dsh\\lib\\bin.js", "nodePath": "C:\\...\\node.exe" }
+> ```
+
+### dsh 发新版后，怎么让已安装的应用用上新版？
+
+内置 dsh 是构建时冻结的（不会自动更新）。三种方式：
+
+1. **外部覆盖（最快，无需重装应用）**：单独更新 dsh 后指给它
+   ```powershell
+   npm install -g @deepseek-ai/dsh          # 或 npx -y @deepseek-ai/dsh@latest
+   # 找到新版 dsh 的 bin.js（全局安装在 %APPDATA%\npm\node_modules\@deepseek-ai\dsh\lib\bin.js），
+   # 写入 %APPDATA%\dsh-desktop\settings.json 的 dshPath，重启应用即生效
+   ```
+   ⚠️ 用外部 dsh 时注意 node 版本：新版 dsh 若由更高版本 Node 安装（原生模块 ABI 不同），
+   需同时设置 `DSH_DESKTOP_NODE`/`nodePath` 指向对应的 node.exe。
+2. **重新打包重装**：`npm run prepare:vendor && npm run dist` → 安装新安装包（内置 dsh 随之更新）。
+3. **整包自动更新（规划中）**：接入 electron-updater + GitHub Release，应用自动检测并更新，用户无感。
 
 ### 想复用现有的 `~/.dsh`（会话/配置/凭据）？
 

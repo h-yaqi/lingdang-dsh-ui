@@ -94,19 +94,81 @@ function binJsFromShim(shimPath) {
   return path.join(path.dirname(shimPath), '..', '@deepseek-ai', 'dsh', 'lib', 'bin.js');
 }
 
+/**
+ * 把用户给的 dsh 入口（bin.js / dsh.cmd / dsh 包目录）解析为 bin.js 绝对路径。
+ * @returns {Promise<string|null>} 解析失败返回 null。
+ */
+async function resolveDshEntryFrom(candidate) {
+  const p = path.resolve(String(candidate));
+  if (!(await exists(p))) return null;
+  if (p.endsWith('bin.js')) return p;
+  if (/\.(cmd|bat)$/i.test(p)) {
+    const b = binJsFromShim(p);
+    if (await exists(b)) return b;
+  }
+  const alt = path.join(p, 'lib', 'bin.js');
+  if (await exists(alt)) return alt;
+  return null;
+}
+
+/** 读取用户设置（%APPDATA%/dsh-desktop/settings.json），失败返回空对象。 */
+function readSettings() {
+  try {
+    const p = path.join(app.getPath('userData'), 'settings.json');
+    if (!fs.existsSync(p)) return {};
+    return JSON.parse(fs.readFileSync(p, 'utf8')) ?? {};
+  } catch {
+    return {};
+  }
+}
+
+/** 选择 node：显式覆盖（环境变量/设置文件）> 内置 > 系统。 */
+async function pickNode(settings) {
+  const override = process.env.DSH_DESKTOP_NODE || settings.nodePath;
+  if (override) {
+    const p = path.resolve(String(override));
+    if (await exists(p)) {
+      log(`node(覆盖): ${p}`);
+      return p;
+    }
+    log(`警告: DSH_DESKTOP_NODE/设置 nodePath 无效，已忽略: ${override}`);
+  }
+  const bundled = bundledNode();
+  if (bundled) {
+    log(`node(内置): ${bundled}`);
+    return bundled;
+  }
+  const sys = await resolveNode();
+  log(`node(系统): ${sys}`);
+  return sys;
+}
+
+/** 选择 dsh bin.js：显式覆盖（环境变量/设置文件）> 内置 > 系统。 */
+async function pickDsh(settings) {
+  const override = process.env.DSH_DESKTOP_DSH || settings.dshPath;
+  if (override) {
+    const b = await resolveDshEntryFrom(override);
+    if (b) {
+      log(`dsh(覆盖): ${b}`);
+      return b;
+    }
+    log(`警告: DSH_DESKTOP_DSH/设置 dshPath 无效，已忽略: ${override}`);
+  }
+  const bundled = bundledDshBin();
+  if (bundled) {
+    log(`dsh(内置): ${bundled}`);
+    return bundled;
+  }
+  const sys = await resolveDshBin();
+  log(`dsh(系统): ${sys}`);
+  return sys;
+}
+
 /** 解析 dsh CLI 的 bin.js：DSH_CLI 环境变量 > where dsh > npx 缓存兜底。 */
 async function resolveDshBin() {
   if (process.env.DSH_CLI) {
-    const p = path.resolve(process.env.DSH_CLI);
-    if (await exists(p)) {
-      if (p.endsWith('bin.js')) return p;
-      if (/\.(cmd|bat)$/i.test(p)) {
-        const b = binJsFromShim(p);
-        if (await exists(b)) return b;
-      }
-      const alt = path.join(p, 'lib', 'bin.js');
-      if (await exists(alt)) return alt;
-    }
+    const b = await resolveDshEntryFrom(process.env.DSH_CLI);
+    if (b) return b;
     throw new Error(`DSH_CLI 无法识别：${process.env.DSH_CLI}`);
   }
   try {
@@ -166,12 +228,12 @@ function startBackend() {
   return new Promise((resolve, reject) => {
     let timer = null;
     (async () => {
-      const nodePath = bundledNode() ?? (await resolveNode());
-      const binJs = bundledDshBin() ?? (await resolveDshBin());
-      const runtimeSource = nodePath === bundledNode() ? '内置' : '系统';
+      const settings = readSettings();
+      const nodePath = await pickNode(settings);
+      const binJs = await pickDsh(settings);
       const home = resolveDshHome();
       fs.mkdirSync(home, { recursive: true });
-      log(`后端(${runtimeSource}运行时): ${nodePath} ${binJs} web --port 0 --no-open`);
+      log(`后端: ${nodePath} ${binJs} web --port 0 --no-open`);
       log(`DSH_HOME: ${home}`);
 
       let settled = false;
