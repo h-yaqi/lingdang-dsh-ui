@@ -55,6 +55,20 @@ function execFileAsync(cmd, args) {
   });
 }
 
+/** 打包后的内置 Node 运行时（extraResources: resources/node/node.exe）；未打包或缺失时返回 null。 */
+function bundledNode() {
+  if (!app.isPackaged) return null;
+  const p = path.join(process.resourcesPath, 'node', 'node.exe');
+  return fs.existsSync(p) ? p : null;
+}
+
+/** 打包后的内置 dsh CLI（extraResources: resources/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js）；未打包或缺失时返回 null。 */
+function bundledDshBin() {
+  if (!app.isPackaged) return null;
+  const p = path.join(process.resourcesPath, 'dsh', 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js');
+  return fs.existsSync(p) ? p : null;
+}
+
 /** 解析 node 可执行文件：DSH_NODE 环境变量 > where node > 默认安装路径。 */
 async function resolveNode() {
   if (process.env.DSH_NODE) {
@@ -152,10 +166,12 @@ function startBackend() {
   return new Promise((resolve, reject) => {
     let timer = null;
     (async () => {
-      const [nodePath, binJs] = await Promise.all([resolveNode(), resolveDshBin()]);
+      const nodePath = bundledNode() ?? (await resolveNode());
+      const binJs = bundledDshBin() ?? (await resolveDshBin());
+      const runtimeSource = nodePath === bundledNode() ? '内置' : '系统';
       const home = resolveDshHome();
       fs.mkdirSync(home, { recursive: true });
-      log(`后端: ${nodePath} ${binJs} web --port 0 --no-open`);
+      log(`后端(${runtimeSource}运行时): ${nodePath} ${binJs} web --port 0 --no-open`);
       log(`DSH_HOME: ${home}`);
 
       let settled = false;

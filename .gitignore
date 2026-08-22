@@ -3,4 +3,5 @@ dist/
 out/
 .npm-cache/
 .electron-cache/
+vendor/
 *.log

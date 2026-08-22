@@ -61,12 +61,41 @@ npm start
 dsh-desktop/
 ├── src/
 │   └── main.js        # Electron 主进程（后端拉起/端口探测/窗口/退出清理）
+├── scripts/
+│   └── prepare-vendor.ps1   # 生成 vendor/（内置 node + dsh CLI）
+├── build/
+│   └── icon.png       # 应用图标（electron-builder 自动转 .ico）
+├── vendor/            # 打包用内置运行时（.gitignore 排除，由脚本生成）
 ├── package.json
 └── README.md
 ```
 
+## 打包为独立 Windows 安装程序
+
+打包产物会**内置 node.exe 与 dsh CLI**，目标机器无需安装 Node.js 或 dsh，即可独立运行。
+
+```powershell
+# 1. 准备内置运行时（下载 node.exe、复制 dsh 依赖闭包，约 230MB，仅需一次）
+npm run prepare:vendor
+#    国内网络下脚本默认从 npmmirror 下载 node；dsh 闭包自动从本机 where dsh 解析
+
+# 2. 打包（国内网络建议先设镜像）
+$env:ELECTRON_BUILDER_BINARIES_MIRROR = "https://npmmirror.com/mirrors/electron-builder-binaries/"
+npm run dist
+
+# 产物
+#   dist/dsh-desktop-setup-0.1.0.exe    NSIS 安装程序（可自选安装目录）
+#   dist/win-unpacked/                  免安装绿色版，可直接运行
+```
+
+说明：
+
+- 应用启动时优先使用**内置运行时**（`resources/node/node.exe` + `resources/dsh/...`），未打包的开发模式（`npm start`）仍回退到系统 Node 与 dsh CLI；
+- 安装程序**未签名**，首次运行 Windows SmartScreen 会提示"更多信息 → 仍要运行"；
+- 图标可自行替换 `build/icon.png`（512×512）。
+
 ## 已知限制 / 后续计划
 
-- 当前为**开发可运行**形态，依赖系统已装的 Node 与 dsh CLI；
-- 下一步可用 electron-builder 打包为独立 `.exe` 安装包（届时把 node 与 dsh CLI 一并打进应用，做到完全免依赖）；
-- 托盘图标、系统通知、开机自启等可在打包阶段一并加入。
+- 安装包较大（约 250MB，主要来自内置 dsh 依赖闭包）；
+- 托盘图标、系统通知、开机自启、代码签名等可作为后续迭代；
+- dsh CLI 升级：重新执行 `npm run prepare:vendor` 即可刷新内置版本。

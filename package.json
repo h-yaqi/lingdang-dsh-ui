@@ -2,12 +2,55 @@
   "name": "dsh-desktop",
   "version": "0.1.0",
   "description": "DeepSeek Harness 桌面客户端：自动启动 DSH Web 服务并在原生窗口中打开 GUI",
+  "author": "h-yaqi",
   "main": "src/main.js",
   "private": true,
   "scripts": {
-    "start": "electron ."
+    "start": "electron .",
+    "prepare:vendor": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/prepare-vendor.ps1",
+    "dist": "electron-builder --win"
   },
   "devDependencies": {
-    "electron": "^33.2.1"
+    "electron": "33.2.1",
+    "electron-builder": "^26.15.3"
+  },
+  "build": {
+    "appId": "com.lingdang.dsh-desktop",
+    "productName": "DeepSeek Harness Desktop",
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "files": [
+      "src/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "vendor/node",
+        "to": "node"
+      },
+      {
+        "from": "vendor/dsh/node_modules",
+        "to": "dsh/node_modules"
+      }
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "perMachine": false,
+      "shortcutName": "DeepSeek Harness Desktop",
+      "artifactName": "dsh-desktop-setup-${version}.${ext}"
+    }
   }
 }
