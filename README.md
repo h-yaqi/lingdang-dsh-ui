@@ -107,8 +107,9 @@ $env:ELECTRON_BUILDER_BINARIES_MIRROR = "https://npmmirror.com/mirrors/electron-
 npm run dist
 
 # 产物
-#   dist/dsh-desktop-setup-0.1.0.exe    NSIS 安装程序（可自选安装目录）
+#   dist/dsh-desktop-setup-0.1.1.exe    NSIS 安装程序（可自选安装目录）
 #   dist/win-unpacked/                  免安装绿色版，可直接运行
+#   dist/latest.yml + *.blockmap        自动更新元数据
 ```
 
 说明：
@@ -116,6 +117,23 @@ npm run dist
 - 应用启动时优先使用**内置运行时**（`resources/node/node.exe` + `resources/dsh/...`），未打包的开发模式（`npm start`）仍回退到系统 Node 与 dsh CLI；
 - 安装程序**未签名**，首次运行 Windows SmartScreen 会提示"更多信息 → 仍要运行"；
 - 图标可自行替换 `build/icon.png`（512×512）。
+
+## 自动更新（v0.1.1 起）
+
+应用内置 **electron-updater**：启动 10 秒后静默检查更新，发现新版自动下载并弹出"立即重启安装"。
+
+- 默认更新源：GitHub Release（`publish` 配置 → 生成的 `app-update.yml`）；
+- **发布新版流程**：
+  ```powershell
+  # 1. 修改 package.json 的 version（如 0.1.2）
+  npm run dist
+  # 2. 发布到 GitHub Release（脚本在 scripts/publish-release.mjs）
+  $env:GH_TOKEN = "你的 classic PAT"
+  node scripts/publish-release.mjs v0.1.2 "版本说明" dist/dsh-desktop-setup-0.1.2.exe dist/latest.yml dist/dsh-desktop-setup-0.1.2.exe.blockmap
+  ```
+- **国内网络**：github.com 波动时更新检查可能失败（仅记录日志，不影响使用）。可把更新源指向自建/镜像的 generic 源：
+  `$env:DSH_DESKTOP_UPDATE_URL = "https://你的服务器/updates"`（需提供 `latest.yml` + 安装包 + blockmap，格式同 `dist/latest.yml`）；
+- ⚠️ 0.1.0 及更早版本**不含**更新代码，需手动安装一次 v0.1.1 后，后续版本才能自动更新。
 
 ## 已知限制 / 后续计划
 

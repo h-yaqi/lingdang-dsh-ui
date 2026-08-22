@@ -1,6 +1,6 @@
 {
   "name": "dsh-desktop",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "DeepSeek Harness 桌面客户端：自动启动 DSH Web 服务并在原生窗口中打开 GUI",
   "author": "h-yaqi",
   "main": "src/main.js",
@@ -51,6 +51,16 @@
       "perMachine": false,
       "shortcutName": "DeepSeek Harness Desktop",
       "artifactName": "dsh-desktop-setup-${version}.${ext}"
-    }
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "h-yaqi",
+        "repo": "lingdang-dsh-ui"
+      }
+    ]
+  },
+  "dependencies": {
+    "electron-updater": "^6.8.9"
   }
 }

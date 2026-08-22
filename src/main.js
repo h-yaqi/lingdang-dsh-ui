@@ -413,6 +413,53 @@ async function fatalError(error) {
 }
 
 // ---------------------------------------------------------------------------
+// 自动更新（仅打包版生效；更新源默认取 resources/app-update.yml 的 GitHub 配置，
+// 可用环境变量 DSH_DESKTOP_UPDATE_URL 覆盖为任意 generic 源，便于自建源/测试）
+// ---------------------------------------------------------------------------
+
+let updater = null;
+
+function setupAutoUpdater() {
+  if (!app.isPackaged) {
+    log('自动更新: 开发模式跳过');
+    return;
+  }
+  try {
+    const { autoUpdater } = require('electron-updater');
+    updater = autoUpdater;
+    if (process.env.DSH_DESKTOP_UPDATE_URL) {
+      log(`自动更新: 使用自定义更新源 ${process.env.DSH_DESKTOP_UPDATE_URL}`);
+      updater.setFeedURL({ provider: 'generic', url: process.env.DSH_DESKTOP_UPDATE_URL });
+    }
+    updater.autoDownload = true;
+    updater.autoInstallOnAppQuit = true;
+    updater.on('checking-for-update', () => log('自动更新: 开始检查更新'));
+    updater.on('update-available', (info) => log(`自动更新: 发现新版本 ${info.version}`));
+    updater.on('update-not-available', (info) => log(`自动更新: 已是最新 (${info.version})`));
+    updater.on('error', (err) => log(`自动更新: 出错 ${err && err.message ? err.message : err}`));
+    updater.on('update-downloaded', async (info) => {
+      log(`自动更新: 新版本 ${info.version} 下载完成，询问安装`);
+      const { response } = await dialog.showMessageBox(win, {
+        type: 'info',
+        title: '发现新版本',
+        message: `新版本 ${info.version} 已下载完成。`,
+        detail: '点击"立即重启安装"将关闭应用并完成更新。',
+        buttons: ['立即重启安装', '稍后'],
+        defaultId: 0,
+        cancelId: 1,
+      });
+      if (response === 0) updater.quitAndInstall();
+    });
+    // 等窗口起来后再检查，避免启动即弹窗
+    setTimeout(() => {
+      updater.checkForUpdates().catch((e) => log(`自动更新: 检查失败 ${e.message}`));
+    }, 10_000);
+  } catch (err) {
+    log(`自动更新: 初始化失败 ${err && err.message ? err.message : err}`);
+  }
+}
+
+// ---------------------------------------------------------------------------
 // 应用生命周期
 // ---------------------------------------------------------------------------
 
@@ -443,6 +490,7 @@ if (!app.requestSingleInstanceLock()) {
     try {
       const url = await startBackend();
       createWindow(url);
+      setupAutoUpdater();
     } catch (error) {
       fatalError(error);
     }
