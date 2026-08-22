@@ -11,11 +11,13 @@
  * 4. 打开原生窗口加载该地址；退出时用 taskkill 结束整个后端进程树。
  */
 
-const { app, BrowserWindow, dialog, Menu, shell } = require('electron');
+const { app, BrowserWindow, dialog, ipcMain, Menu, shell } = require('electron');
 const { spawn, execFile } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
+
+const INJECT_SETTINGS_JS = require('./inject-settings.js');
 
 const APP_NAME = 'DeepSeek Harness Desktop';
 const BOOT_TIMEOUT_MS = 90_000;
@@ -219,6 +221,9 @@ let child = null;
 let backendUrl = null;
 let booted = false;
 let quitting = false;
+/** 当前生效的运行时（供版本查询/更新功能使用）。 */
+let activeNodePath = null;
+let activeDshBin = null;
 
 /**
  * 启动 `node <bin.js> web --port 0 --no-open` 并等待其打印监听地址。
@@ -231,6 +236,8 @@ function startBackend() {
       const settings = readSettings();
       const nodePath = await pickNode(settings);
       const binJs = await pickDsh(settings);
+      activeNodePath = nodePath;
+      activeDshBin = binJs;
       const home = resolveDshHome();
       fs.mkdirSync(home, { recursive: true });
       log(`后端: ${nodePath} ${binJs} web --port 0 --no-open`);
@@ -364,6 +371,7 @@ function createWindow(url) {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
+      preload: path.join(__dirname, 'preload.js'),
     },
   });
   win.loadURL(url);
@@ -373,7 +381,10 @@ function createWindow(url) {
   });
   win.webContents.on('did-finish-load', () => {
     log(`GUI 已加载: ${win.webContents.getURL()}`);
+    // 等待 SPA 就绪后注入设置页卡片（卡片本身带 MutationObserver 自动重试）
+    setTimeout(injectSettingsUI, 3000);
   });
+  installDomDump();
   win.on('closed', () => {
     win = null;
   });
@@ -410,6 +421,122 @@ async function fatalError(error) {
     buttons: ['退出'],
   });
   app.exit(1);
+}
+
+// ---------------------------------------------------------------------------
+// IPC：设置页"关于 dsh-desktop"卡片（版本显示 + 检查更新）
+// ---------------------------------------------------------------------------
+
+/** 从 bin.js 路径推导 dsh 包版本（…/@deepseek-ai/dsh/lib/bin.js → …/@deepseek-ai/dsh/package.json）。 */
+async function dshVersionOf(binJs) {
+  if (!binJs) return '未知';
+  try {
+    const pkg = path.join(path.dirname(binJs), '..', 'package.json');
+    return JSON.parse(fs.readFileSync(pkg, 'utf8')).version ?? '未知';
+  } catch {
+    return '未知';
+  }
+}
+
+/** 查询 node 运行时版本。 */
+async function nodeVersionOf(nodePath) {
+  if (!nodePath) return '未知';
+  try {
+    return (await execFileAsync(nodePath, ['--version'])).trim();
+  } catch {
+    return '未知';
+  }
+}
+
+/** 注册渲染进程 IPC 处理器（设置页卡片使用）。 */
+function setupIpc() {
+  ipcMain.handle('dsh-desktop:get-versions', async () => ({
+    appVersion: app.getVersion(),
+    dshVersion: await dshVersionOf(activeDshBin),
+    nodeVersion: await nodeVersionOf(activeNodePath),
+    dshHome: resolveDshHome(),
+  }));
+
+  ipcMain.handle('dsh-desktop:check-update', async () => {
+    if (!app.isPackaged || !updater) {
+      return { status: 'dev', message: '开发模式不支持自动更新（打包版可用）' };
+    }
+    try {
+      const result = await updater.checkForUpdates();
+      if (result && result.updateInfo) {
+        const message = `发现新版本 ${result.updateInfo.version}，正在后台下载，完成后会提示安装`;
+        log(`手动检查更新: ${message}`);
+        return { status: 'available', version: result.updateInfo.version, message };
+      }
+      const message = `已是最新版本（${app.getVersion()}）`;
+      log(`手动检查更新: ${message}`);
+      return { status: 'current', message };
+    } catch (err) {
+      log(`手动检查更新失败: ${err && err.message ? err.message : err}`);
+      return { status: 'error', message: `检查失败：${err && err.message ? err.message : err}` };
+    }
+  });
+}
+
+/** 向设置页注入"关于 dsh-desktop"卡片（main world 脚本）。 */
+function injectSettingsUI() {
+  win?.webContents.executeJavaScript(INJECT_SETTINGS_JS).catch(() => {
+    /* 页面未就绪/注入失败不影响主流程 */
+  });
+}
+
+/** 调试工具：DSH_DESKTOP_DUMP_DOM=1 时把设置页 DOM 结构写到日志目录，便于排查注入选择器。 */
+function installDomDump() {
+  if (process.env.DSH_DESKTOP_DUMP_DOM !== '1' || !win) return;
+  win.webContents.on('did-finish-load', async () => {
+    try {
+      await new Promise((r) => setTimeout(r, 5000));
+      const result = await win.webContents.executeJavaScript(`(async () => {
+        const out = {};
+        const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+        const allEls = () => [...document.querySelectorAll('*')];
+        const vis = (e) => e.offsetParent !== null && (e.textContent || '').trim().length > 0;
+        const items = allEls().filter(vis).map((e) => ({
+          tag: e.tagName,
+          text: (e.textContent || '').trim().slice(0, 40),
+          cls: (e.className || '').toString().slice(0, 40),
+          role: e.getAttribute && e.getAttribute('role'),
+        }));
+        out.items = items.filter((x) => /设置|Settings/.test(x.text)).slice(0, 20);
+        out.buttons = items.filter((x) => x.tag === 'BUTTON' || x.role === 'button').slice(0, 30);
+        const clickCandidates = allEls().filter((e) => vis(e) && (e.textContent || '').trim() === '设置' && e.children.length === 0);
+        out.candidates = clickCandidates.length;
+        for (const el of clickCandidates.slice(0, 3)) {
+          el.click();
+          await sleep(2500);
+        }
+        await sleep(1500);
+        out.url = location.href;
+        out.title = document.title;
+        out.headings = allEls().filter((e) => /^H[1-6]$/.test(e.tagName) || (e.getAttribute && e.getAttribute('role') === 'heading')).map((e) => (e.textContent || '').trim().slice(0, 60)).slice(0, 30);
+        const tong = allEls().filter((e) => e.children.length <= 1 && /通用/.test(e.textContent || '')).slice(0, 5);
+        out.tongyong = tong.map((e) => ({ tag: e.tagName, text: (e.textContent || '').trim().slice(0, 60), html: e.outerHTML.slice(0, 400) }));
+        out.text = document.body.innerText.slice(0, 2500);
+        // 自动点击"检查更新"按钮并读取状态（验证按钮 → IPC → 更新检查链路）
+        const cardBtn = document.getElementById('dshd-checkbtn');
+        if (cardBtn) {
+          cardBtn.click();
+          await sleep(5000);
+          out.updateStatus = (document.getElementById('dshd-status') || {}).textContent || '(none)';
+          out.updateBtnDisabled = cardBtn.disabled;
+          out.cardText = (document.getElementById('dsh-desktop-about-card') || {}).innerText || '(card gone)';
+        } else {
+          out.updateStatus = '(card button not found)';
+        }
+        return JSON.stringify(out, null, 1);
+      })()`);
+      const dumpPath = path.join(app.getPath('userData'), 'logs', 'dom-dump.txt');
+      fs.writeFileSync(dumpPath, result, 'utf8');
+      log(`DOM dump 已写入 ${dumpPath}`);
+    } catch (e) {
+      log(`DOM dump 失败: ${e.message}`);
+    }
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -487,6 +614,7 @@ if (!app.requestSingleInstanceLock()) {
 
   app.whenReady().then(async () => {
     buildMenu();
+    setupIpc();
     try {
       const url = await startBackend();
       createWindow(url);

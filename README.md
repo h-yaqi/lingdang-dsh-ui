@@ -122,6 +122,8 @@ npm run dist
 
 应用内置 **electron-updater**：启动 10 秒后静默检查更新，发现新版自动下载并弹出"立即重启安装"。
 
+- 设置 → 通用设置 里显示「关于 dsh-desktop」卡片：**桌面端版本 / dsh 版本 / Node 版本**，
+  以及 **检查更新** 按钮（一键触发真实检查并显示结果，v0.1.2 起）；
 - 默认更新源：GitHub Release（`publish` 配置 → 生成的 `app-update.yml`）；
 - **发布新版流程**：
   ```powershell

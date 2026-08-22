@@ -1,6 +1,6 @@
 {
   "name": "dsh-desktop",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "DeepSeek Harness 桌面客户端：自动启动 DSH Web 服务并在原生窗口中打开 GUI",
   "author": "h-yaqi",
   "main": "src/main.js",
