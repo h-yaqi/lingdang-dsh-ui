@@ -463,7 +463,9 @@ function setupIpc() {
     }
     try {
       const result = await updater.checkForUpdates();
-      if (result && result.updateInfo) {
+      // 注意：无更新时 checkForUpdates 也返回非 null 对象（isUpdateAvailable: false + updateInfo），
+      // 必须用 isUpdateAvailable === true 判断，不能只看 result.updateInfo。
+      if (result && result.isUpdateAvailable === true && result.updateInfo) {
         const message = `发现新版本 ${result.updateInfo.version}，正在后台下载，完成后会提示安装`;
         log(`手动检查更新: ${message}`);
         return { status: 'available', version: result.updateInfo.version, message };
@@ -591,6 +593,10 @@ function setupAutoUpdater() {
 // ---------------------------------------------------------------------------
 
 app.setName('dsh-desktop');
+// 测试/多实例隔离：DSH_DESKTOP_USERDATA 覆盖 userData（含单实例锁与日志位置）
+if (process.env.DSH_DESKTOP_USERDATA) {
+  app.setPath('userData', path.resolve(process.env.DSH_DESKTOP_USERDATA));
+}
 
 if (!app.requestSingleInstanceLock()) {
   app.quit();
