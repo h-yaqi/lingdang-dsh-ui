@@ -83,6 +83,16 @@ npm start
 - 运行日志：`%APPDATA%\dsh-desktop\logs\desktop.log`
 - 后端 stdout/stderr 出错时会带在错误对话框的详细信息里
 
+## 安装后核对
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/verify-install.ps1
+```
+
+一次性打印：已安装的桌面端版本（exe FileVersion）、内置 dsh 版本、内置 node 版本、
+`app.asar` 大小与时间、当前运行中的进程、以及 `desktop.log` 的最后 8 行。
+用 `-Root <目录>` 可核对非默认安装位置的副本。
+
 ## 目录结构
 
 ```
