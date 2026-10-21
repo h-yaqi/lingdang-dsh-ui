@@ -63,6 +63,11 @@ npm start
 2. **重新打包重装**：`npm run prepare:vendor && npm run dist` → 安装新安装包（内置 dsh 随之更新）。
 3. **整包自动更新（规划中）**：接入 electron-updater + GitHub Release，应用自动检测并更新，用户无感。
 
+⚠️ **dsh 版本与桌面壳的兼容边界**：dsh 从 `0.1.2-rc.1` 起给 Web GUI 加了进程 token 鉴权，
+启动打印的地址变成 `dsh web: http://127.0.0.1:PORT/?token=…`，不带 token 访问直接 401。
+桌面壳 **0.1.4 起**会连 query 一起捕获并交给窗口加载；0.1.3 及更早只取 `host:port`，
+配新版 dsh 会打开一个 401 页面。所以「外部覆盖」或「重新打包」时，壳版本与 dsh 版本要配对。
+
 ### 想复用现有的 `~/.dsh`（会话/配置/凭据）？
 
 ```powershell
@@ -139,6 +144,8 @@ npm run dist
 
 ## 已知限制 / 后续计划
 
-- 安装包较大（约 250MB，主要来自内置 dsh 依赖闭包）；
+- 安装包较大（约 250MB，主要来自内置 dsh 依赖闭包；内置 dsh 0.2.1-rc.2 后约 268MB）；
 - 托盘图标、系统通知、开机自启、代码签名等可作为后续迭代；
-- dsh CLI 升级：重新执行 `npm run prepare:vendor` 即可刷新内置版本。
+- dsh CLI 升级：重新执行 `npm run prepare:vendor` 即可刷新内置版本（当前 vendor 内置 **0.2.1-rc.2**）；
+  若要指定某个版本的依赖树，用 `-DshRoot <含 @deepseek-ai/dsh 的 node_modules 目录>`，
+  脚本检测到 `vendor/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js` 已存在时会跳过，需先移走旧目录。

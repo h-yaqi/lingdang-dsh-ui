@@ -21,7 +21,9 @@ const INJECT_SETTINGS_JS = require('./inject-settings.js');
 
 const APP_NAME = 'DeepSeek Harness Desktop';
 const BOOT_TIMEOUT_MS = 90_000;
-const URL_LINE_RE = /dsh web: (http:\/\/127\.0\.0\.1:\d+)/;
+// dsh >= 0.1.2-rc.1 起 GUI 强制带进程 token：`dsh web: http://127.0.0.1:PORT/?token=…`，
+// 不带 token 访问会 401，因此整段地址（含 query）都要捕获并交给窗口加载。
+const URL_LINE_RE = /dsh web: (http:\/\/127\.0\.0\.1:\d+\S*)/;
 const MAX_LOG = 64 * 1024;
 
 let _logPath = null;
@@ -271,7 +273,7 @@ function startBackend() {
           backendUrl = m[1];
           booted = true;
           clearTimeout(timer);
-          log(`监听地址: ${backendUrl}`);
+          log(`监听地址: ${backendUrl.replace(/\?.*$/, '')}`);
           resolve(backendUrl);
         }
       });
@@ -380,7 +382,7 @@ function createWindow(url) {
     return { action: 'deny' };
   });
   win.webContents.on('did-finish-load', () => {
-    log(`GUI 已加载: ${win.webContents.getURL()}`);
+    log(`GUI 已加载: ${win.webContents.getURL().replace(/\?.*$/, '')}`);
     // 等待 SPA 就绪后注入设置页卡片（卡片本身带 MutationObserver 自动重试）
     setTimeout(injectSettingsUI, 3000);
   });
