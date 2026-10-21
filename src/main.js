@@ -11,7 +11,7 @@
  * 4. 打开原生窗口加载该地址；退出时用 taskkill 结束整个后端进程树。
  */
 
-const { app, BrowserWindow, dialog, ipcMain, Menu, shell } = require('electron');
+const { app, BrowserWindow, dialog, ipcMain, Menu, screen, shell } = require('electron');
 const { spawn, execFile } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -542,6 +542,257 @@ function installDomDump() {
 }
 
 // ---------------------------------------------------------------------------
+// 悬浮球窗口（Windows 浮动小球）
+// ---------------------------------------------------------------------------
+
+const BALL_COLLAPSED = 64; // 收起时窗口尺寸（球 56px + 各 4px 边距）
+const BALL_PANEL_W = 336; // 展开面板后窗口宽
+const BALL_PANEL_H = 440; // 展开面板后窗口高
+const BALL_EDGE = 60; // 球左上角在窗口内的偏移（宽/高 - 60）
+const SLIVER = 6; // 贴边后保留的可见球宽/高
+const SNAP_DIST = 40; // 松手时距屏幕边缘多少 px 内触发吸附
+const HOT_ZONE = 26; // 光标进入屏幕边缘多少 px 内触发滑出
+const RE_SNAP_MS = 1400; // 光标离开球多久后自动缩回贴边
+
+let ballWin = null;
+let ballSnapEdge = null; // 'left' | 'right' | 'top' | 'bottom' | null
+let ballSlidOut = false; // 贴边状态下是否已滑出
+let ballPanelOpen = false; // 面板是否展开
+let ballHoverTimer = null; // 贴边光标轮询
+let ballCursorAwaySince = 0; // 光标离开球的时间戳
+
+/** 当前球左上角在屏幕上的坐标（= 窗口右下角 - BALL_EDGE）。 */
+function ballScreenAnchor() {
+  const b = ballWin.getBounds();
+  return { x: b.x + b.width - BALL_EDGE, y: b.y + b.height - BALL_EDGE };
+}
+
+function ballDisplay() {
+  return screen.getDisplayMatching(ballWin.getBounds());
+}
+
+/** 把球锚点放到屏幕内，避免窗口整体出屏。 */
+function clampAnchorToWorkArea(anchor) {
+  const wa = ballDisplay().workArea;
+  return {
+    x: Math.min(Math.max(anchor.x, wa.x + 8), wa.x + wa.width - BALL_EDGE - 8),
+    y: Math.min(Math.max(anchor.y, wa.y + 8), wa.y + wa.height - BALL_EDGE - 8),
+  };
+}
+
+/** 按面板开/关状态重设窗口尺寸，球保持原位。 */
+function applyBallLayout() {
+  const anchor = clampAnchorToWorkArea(ballScreenAnchor());
+  if (ballPanelOpen) {
+    ballWin.setBounds({
+      x: anchor.x - (BALL_PANEL_W - BALL_EDGE),
+      y: anchor.y - (BALL_PANEL_H - BALL_EDGE),
+      width: BALL_PANEL_W,
+      height: BALL_PANEL_H,
+    });
+  } else {
+    ballWin.setBounds({ x: anchor.x - 4, y: anchor.y - 4, width: BALL_COLLAPSED, height: BALL_COLLAPSED });
+  }
+}
+
+/** 贴边：把球基本移出屏幕，只留 SLIVER 宽/高的球可见。 */
+function snapBall(edge) {
+  const anchor = ballScreenAnchor();
+  const wa = ballDisplay().workArea;
+  let x = anchor.x;
+  let y = anchor.y;
+  if (edge === 'left') x = wa.x - 56 + SLIVER;
+  else if (edge === 'right') x = wa.x + wa.width - SLIVER;
+  if (edge === 'top') y = wa.y - 56 + SLIVER;
+  else if (edge === 'bottom') y = wa.y + wa.height - SLIVER;
+  ballWin.setPosition(Math.round(x - (ballWin.getBounds().width - BALL_EDGE)), Math.round(y - (ballWin.getBounds().height - BALL_EDGE)));
+  ballSnapEdge = edge;
+  ballSlidOut = false;
+  ballCursorAwaySince = 0;
+  startBallHoverPoll();
+}
+
+/** 滑出：把球完整放回屏幕内（贴边状态下的悬停展开）。 */
+function slideBallOut(edge) {
+  const anchor = ballScreenAnchor();
+  const wa = ballDisplay().workArea;
+  let x = anchor.x;
+  let y = anchor.y;
+  const m = 8;
+  if (edge === 'left') x = wa.x + m;
+  else if (edge === 'right') x = wa.x + wa.width - BALL_EDGE - m;
+  if (edge === 'top') y = wa.y + m;
+  else if (edge === 'bottom') y = wa.y + wa.height - BALL_EDGE - m;
+  ballWin.setPosition(Math.round(x - (ballWin.getBounds().width - BALL_EDGE)), Math.round(y - (ballWin.getBounds().height - BALL_EDGE)));
+  ballSlidOut = true;
+  ballCursorAwaySince = 0;
+}
+
+/** 松手后按最近边缘吸附，未靠近边缘则保持自由。 */
+function evaluateSnap() {
+  if (ballPanelOpen) return; // 面板展开时不吸附
+  const b = ballWin.getBounds();
+  const wa = ballDisplay().workArea;
+  const dLeft = b.x - wa.x;
+  const dRight = wa.x + wa.width - (b.x + b.width);
+  const dTop = b.y - wa.y;
+  const dBottom = wa.y + wa.height - (b.y + b.height);
+  const min = Math.min(dLeft, dRight, dTop, dBottom);
+  if (min > SNAP_DIST) {
+    ballSnapEdge = null;
+    ballSlidOut = false;
+    stopBallHoverPoll();
+    return;
+  }
+  const edge = min === dLeft ? 'left' : min === dRight ? 'right' : min === dTop ? 'top' : 'bottom';
+  snapBall(edge);
+}
+
+function startBallHoverPoll() {
+  if (ballHoverTimer) return;
+  ballHoverTimer = setInterval(() => {
+    if (!ballWin || ballSnapEdge === null) {
+      stopBallHoverPoll();
+      return;
+    }
+    const p = screen.getCursorScreenPoint();
+    const b = ballWin.getBounds();
+    const wa = ballDisplay().workArea;
+    const edge = ballSnapEdge;
+
+    // 光标是否进入贴边热区（该屏幕边缘附近，且大致在球的纵向/横向范围内）
+    let nearEdge = false;
+    if (edge === 'left') nearEdge = p.x <= wa.x + HOT_ZONE && p.y >= b.y - 40 && p.y <= b.y + b.height + 40;
+    else if (edge === 'right') nearEdge = p.x >= wa.x + wa.width - HOT_ZONE && p.y >= b.y - 40 && p.y <= b.y + b.height + 40;
+    else if (edge === 'top') nearEdge = p.y <= wa.y + HOT_ZONE && p.x >= b.x - 40 && p.x <= b.x + b.width + 40;
+    else nearEdge = p.y >= wa.y + wa.height - HOT_ZONE && p.x >= b.x - 40 && p.x <= b.x + b.width + 40;
+
+    if (nearEdge) {
+      if (!ballSlidOut) slideBallOut(edge);
+      ballCursorAwaySince = 0;
+      return;
+    }
+    // 光标不在热区：若已滑出且离开球一段时间，自动缩回贴边
+    if (ballSlidOut) {
+      const inflate = 60;
+      const onBall = p.x >= b.x - inflate && p.x <= b.x + b.width + inflate && p.y >= b.y - inflate && p.y <= b.y + b.height + inflate;
+      if (!onBall) {
+        if (!ballCursorAwaySince) ballCursorAwaySince = Date.now();
+        else if (Date.now() - ballCursorAwaySince > RE_SNAP_MS) {
+          if (!ballPanelOpen) snapBall(edge);
+          else ballCursorAwaySince = 0;
+        }
+      } else {
+        ballCursorAwaySince = 0;
+      }
+    }
+  }, 120);
+}
+
+function stopBallHoverPoll() {
+  if (ballHoverTimer) {
+    clearInterval(ballHoverTimer);
+    ballHoverTimer = null;
+  }
+}
+
+function createBallWindow() {
+  if (ballWin) return;
+  ballWin = new BrowserWindow({
+    width: BALL_COLLAPSED,
+    height: BALL_COLLAPSED,
+    frame: false,
+    transparent: true,
+    hasShadow: false,
+    resizable: false,
+    maximizable: false,
+    minimizable: false,
+    fullscreenable: false,
+    skipTaskbar: true,
+    alwaysOnTop: true,
+    focusable: false,
+    webPreferences: {
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+      preload: path.join(__dirname, 'ball-preload.js'),
+    },
+  });
+  ballWin.setAlwaysOnTop(true, 'screen-saver');
+  if (process.platform !== 'win32') {
+    ballWin.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+  }
+  // 初始位置：主窗口右下角附近
+  const wa = screen.getPrimaryDisplay().workArea;
+  ballWin.setPosition(wa.x + wa.width - BALL_COLLAPSED - 40, wa.y + wa.height - BALL_COLLAPSED - 40);
+  ballWin.loadFile(path.join(__dirname, 'ball.html'));
+  ballWin.on('closed', () => {
+    stopBallHoverPoll();
+    ballWin = null;
+    ballSnapEdge = null;
+    ballSlidOut = false;
+    ballPanelOpen = false;
+  });
+  ballWin.on('minimize', () => {
+    // 悬浮球不参与最小化
+    ballWin?.restore();
+  });
+}
+
+function ballContextMenu() {
+  const menu = Menu.buildFromTemplate([
+    { label: '打开主窗口', click: () => restoreMainWindow() },
+    { type: 'separator' },
+    { label: '退出悬浮球', click: () => ballWin?.close() },
+    { label: '退出 dsh-desktop', click: () => app.quit() },
+  ]);
+  menu.popup({ window: ballWin });
+}
+
+function restoreMainWindow() {
+  if (!win || win.isDestroyed()) return;
+  if (win.isMinimized()) win.restore();
+  win.show();
+  win.focus();
+}
+
+/** 悬浮球 IPC。 */
+function setupBallIpc() {
+  ipcMain.handle('ball:get-backend-url', () => backendUrl || '');
+  ipcMain.on('ball:move', (_e, { dx = 0, dy = 0 } = {}) => {
+    if (!ballWin) return;
+    const [x, y] = ballWin.getPosition();
+    ballWin.setPosition(x + dx, y + dy);
+  });
+  ipcMain.on('ball:pointer-down', () => {
+    // 贴边时先滑出，随后解除吸附状态，让拖动完全自由
+    if (ballWin && ballSnapEdge !== null && !ballSlidOut) slideBallOut(ballSnapEdge);
+    ballSnapEdge = null;
+    ballSlidOut = false;
+    ballCursorAwaySince = 0;
+    stopBallHoverPoll();
+  });
+  ipcMain.on('ball:dropped', () => {
+    if (ballWin) evaluateSnap();
+  });
+  ipcMain.on('ball:panel', (_e, { open = false } = {}) => {
+    if (!ballWin) return;
+    ballPanelOpen = open;
+    if (open) {
+      ballSnapEdge = null;
+      ballSlidOut = false;
+      stopBallHoverPoll();
+    }
+    applyBallLayout();
+  });
+  ipcMain.handle('ball:activate-main', () => {
+    restoreMainWindow();
+    return true;
+  });
+  ipcMain.on('ball:context-menu', () => ballContextMenu());
+}
+
+// ---------------------------------------------------------------------------
 // 自动更新（仅打包版生效；更新源默认取 resources/app-update.yml 的 GitHub 配置，
 // 可用环境变量 DSH_DESKTOP_UPDATE_URL 覆盖为任意 generic 源，便于自建源/测试）
 // ---------------------------------------------------------------------------
@@ -613,6 +864,7 @@ if (!app.requestSingleInstanceLock()) {
   });
   app.on('will-quit', () => {
     stopBackend();
+    if (ballWin && !ballWin.isDestroyed()) ballWin.destroy();
   });
   app.on('window-all-closed', () => {
     app.quit();
@@ -621,9 +873,11 @@ if (!app.requestSingleInstanceLock()) {
   app.whenReady().then(async () => {
     buildMenu();
     setupIpc();
+    setupBallIpc();
     try {
       const url = await startBackend();
       createWindow(url);
+      createBallWindow();
       setupAutoUpdater();
     } catch (error) {
       fatalError(error);

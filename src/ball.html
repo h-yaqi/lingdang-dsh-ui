@@ -1,0 +1,300 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>API Usage Ball</title>
+<style>
+  :root {
+    --bg-overlay: #1d222c;
+    --bg-layer: #161b22;
+    --border: #2a3040;
+    --text: #e6e9ef;
+    --text-2: #9aa4b2;
+    --ok: #3fb950;
+    --warn: #d29922;
+    --err: #f85149;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0;
+    width: 100%; height: 100%;
+    background: transparent;
+    overflow: hidden;
+    font-family: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+
+  /* ── 球：固定在窗口右下角（主进程以它为中心展开/收缩窗口） ── */
+  #ball {
+    position: absolute;
+    right: 4px; bottom: 4px;
+    width: 56px; height: 56px;
+    border-radius: 50%;
+    background: radial-gradient(circle at 35% 30%, #2b3342, var(--bg-overlay) 70%);
+    border: 1px solid #3a4150;
+    box-shadow: 0 6px 20px rgba(0,0,0,.5), inset 0 1px 0 rgba(255,255,255,.08);
+    display: flex; align-items: center; justify-content: center;
+    cursor: grab;
+    touch-action: none;
+    z-index: 10;
+  }
+  #ball.dragging { cursor: grabbing; }
+
+  #dot {
+    width: 18px; height: 18px;
+    border-radius: 50%;
+    background: var(--text-2);
+    transition: background .2s;
+  }
+  #ball.busy #dot { background: var(--ok); animation: pulse 1.1s ease-in-out infinite; }
+  #ball.warn #dot { background: var(--warn); }
+
+  #badge {
+    position: absolute; top: -2px; right: -2px;
+    min-width: 18px; height: 18px;
+    border-radius: 9px;
+    background: var(--warn);
+    color: #0b0d10;
+    font-size: 11px; font-weight: 700;
+    line-height: 18px; text-align: center;
+    padding: 0 5px;
+    display: none;
+  }
+  #badge.show { display: block; }
+
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .35; } }
+
+  /* ── 面板：球上方展开 ── */
+  #panel {
+    position: absolute;
+    right: 0; bottom: 64px;
+    width: 320px;
+    background: var(--bg-overlay);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 12px;
+    box-shadow: 0 12px 40px rgba(0,0,0,.55);
+    color: var(--text);
+    display: none;
+    z-index: 5;
+    user-select: text;
+    -webkit-user-select: text;
+    max-height: calc(100% - 72px);
+    overflow-y: auto;
+  }
+  #panel.open { display: block; }
+
+  .card { margin-bottom: 10px; }
+  .card:last-child { margin-bottom: 0; }
+  .card-title {
+    font-size: 12px; font-weight: 600;
+    color: var(--text-2);
+    margin-bottom: 6px;
+  }
+  .row {
+    display: flex; justify-content: space-between;
+    gap: 8px; font-size: 12px; line-height: 1.9;
+  }
+  .row .k { color: var(--text-2); white-space: nowrap; }
+  .row .v { color: var(--text); font-variant-numeric: tabular-nums; text-align: right; }
+  .err { color: var(--err); font-size: 12px; }
+  .muted { color: var(--text-2); font-size: 12px; }
+  .btn {
+    margin-top: 8px; padding: 4px 12px;
+    border-radius: 6px;
+    border: 1px solid #3a4150;
+    background: transparent;
+    color: var(--text);
+    font-size: 12px;
+    cursor: pointer;
+  }
+  .btn:hover { background: #242b38; }
+  .actions { display: flex; gap: 8px; }
+  .link {
+    background: none; border: none; color: var(--text-2);
+    font-size: 12px; cursor: pointer; padding: 2px 0; text-align: left;
+  }
+  .link:hover { color: var(--text); }
+</style>
+</head>
+<body>
+  <div id="panel"></div>
+  <div id="ball" title="API 使用状况">
+    <span id="dot"></span>
+    <span id="badge"></span>
+  </div>
+
+<script>
+(function () {
+  'use strict';
+
+  var ball = document.getElementById('ball');
+  var panel = document.getElementById('panel');
+  var backendUrl = null;
+
+  // ── 数据 ──────────────────────────────────────────────
+  function fmtNum(n) { return (typeof n === 'number') ? n.toLocaleString('en-US') : String(n); }
+  function fmtTime(ts) {
+    var d = new Date(ts);
+    function p(x) { return String(x).padStart(2, '0'); }
+    return p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds());
+  }
+
+  function esc(s) { return String(s).replace(/[&<>"']/g, function (c) {
+    return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+  }); }
+
+  function row(k, v) {
+    return '<div class="row"><span class="k">' + esc(k) + '</span><span class="v">' + esc(v) + '</span></div>';
+  }
+
+  function render(data) {
+    var running = data ? data.running : 0;
+    var pending = data ? data.pending : 0;
+
+    ball.className = running > 0 ? 'busy' : (pending > 0 ? 'warn' : '');
+    var badge = document.getElementById('badge');
+    if (pending > 0) { badge.textContent = String(pending); badge.className = 'show'; }
+    else { badge.className = ''; badge.textContent = ''; }
+
+    if (!data) return;
+
+    var html = '';
+
+    // 余额卡
+    var b = data.balance;
+    html += '<div class="card"><div class="card-title">账户余额' + (b && b.data && b.data.is_available === false ? '（不可用）' : '') + '</div>';
+    if (b && b.ok && b.data) {
+      var infos = b.data.balance_infos || [];
+      if (infos.length === 0) html += '<div class="muted">无余额信息</div>';
+      infos.forEach(function (info) {
+        html += row(info.currency + ' 总余额', info.total_balance);
+        html += row('赠送 / 充值', (info.granted_balance || '0') + ' / ' + (info.topped_up_balance || '0'));
+      });
+    } else if (b) {
+      html += '<div class="err">' + esc(b.message || ('获取失败 (' + b.code + ')')) + '</div>';
+    } else {
+      html += '<div class="muted">加载中…</div>';
+    }
+    html += '</div>';
+
+    // 今日用量卡
+    var t = data.today;
+    html += '<div class="card"><div class="card-title">今日用量' + (t && t.date ? ' · ' + esc(t.date) : '') + '</div>';
+    if (t) {
+      html += row('请求次数', fmtNum(t.requests));
+      html += row('输入 tokens', fmtNum(t.inputTokens));
+      html += row('输出 tokens', fmtNum(t.outputTokens));
+      html += row('缓存读 tokens', fmtNum(t.cacheRead));
+      html += row('缓存写 tokens', fmtNum(t.cacheWrite));
+      html += row('推理 tokens', fmtNum(t.reasoning));
+    } else {
+      html += '<div class="muted">暂无数据</div>';
+    }
+    html += '</div>';
+
+    // 状态卡
+    html += '<div class="card"><div class="card-title">状态</div>';
+    html += row('运行中任务', fmtNum(data.running));
+    html += row('待处理消息', fmtNum(data.pending));
+    html += row('更新时间', fmtTime(data.updatedAt));
+    html += '<div class="actions">' +
+      '<button class="btn" id="btn-refresh">立即刷新</button>' +
+      '<button class="btn" id="btn-main">打开主窗口</button>' +
+      '</div>';
+    html += '</div>';
+
+    panel.innerHTML = html;
+
+    var refresh = document.getElementById('btn-refresh');
+    if (refresh) refresh.addEventListener('click', function () { load(true); });
+    var main = document.getElementById('btn-main');
+    if (main) main.addEventListener('click', function () {
+      if (window.dshBall) window.dshBall.activateMain();
+    });
+  }
+
+  function load(force) {
+    if (!window.dshBall) return;
+    window.dshBall.getBackendUrl().then(function (url) {
+      backendUrl = url;
+      var path = url.replace(/\/+$/, '') + '/api/usage-ball/snapshot' + (force ? '?t=' + Date.now() : '');
+      return fetch(path, { cache: 'no-store' }).then(function (r) {
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        return r.json();
+      }).then(function (data) {
+        render(data);
+      }).catch(function (e) {
+        render(null);
+        panel.innerHTML = '<div class="card"><div class="card-title">账户余额</div>' +
+          '<div class="err">无法获取数据：' + esc(e && e.message || e) + '</div>' +
+          '<div class="muted">请确认 "API Usage Status Ball" 插件正在运行。</div>' +
+          '<button class="btn" id="btn-refresh">重试</button></div>';
+        var retry = document.getElementById('btn-refresh');
+        if (retry) retry.addEventListener('click', function () { load(true); });
+      });
+    }).catch(function (e) {
+      panel.innerHTML = '<div class="muted">桥接不可用：' + esc(e && e.message || e) + '</div>';
+    });
+  }
+
+  // ── 拖拽（增量送主进程） + 点击/拖动区分 ────────────────
+  var dragging = false;
+  var moved = false;
+  var lastX = 0, lastY = 0;
+  var downX = 0, downY = 0;
+
+  ball.addEventListener('pointerdown', function (e) {
+    dragging = true;
+    moved = false;
+    lastX = e.screenX; lastY = e.screenY;
+    downX = e.screenX; downY = e.screenY;
+    ball.setPointerCapture(e.pointerId);
+    ball.classList.add('dragging');
+    if (window.dshBall) window.dshBall.pointerDown(); // 贴边时先滑出
+  });
+
+  ball.addEventListener('pointermove', function (e) {
+    if (!dragging) return;
+    var dx = e.screenX - lastX;
+    var dy = e.screenY - lastY;
+    if (Math.abs(e.screenX - downX) + Math.abs(e.screenY - downY) > 5) moved = true;
+    lastX = e.screenX; lastY = e.screenY;
+    if (moved && window.dshBall) window.dshBall.moveBall(dx, dy);
+  });
+
+  function endDrag(e) {
+    if (!dragging) return;
+    dragging = false;
+    ball.classList.remove('dragging');
+    try { ball.releasePointerCapture(e.pointerId); } catch (err) {}
+    if (moved) {
+      if (window.dshBall) window.dshBall.ballDropped(); // 主进程检测贴边
+    } else {
+      togglePanel();
+    }
+  }
+  ball.addEventListener('pointerup', endDrag);
+  ball.addEventListener('pointercancel', endDrag);
+
+  function togglePanel() {
+    var open = !panel.classList.contains('open');
+    panel.classList.toggle('open', open);
+    if (open) load(false);
+    if (window.dshBall) window.dshBall.setPanel(open);
+  }
+
+  // 右键：主进程弹菜单
+  ball.addEventListener('contextmenu', function (e) {
+    e.preventDefault();
+    if (window.dshBall) window.dshBall.contextMenu();
+  });
+
+  // ── 启动 ──────────────────────────────────────────────
+  load(false);
+  setInterval(function () { load(false); }, 30000);
+})();
+</script>
+</body>
+</html>
