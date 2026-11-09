@@ -156,4 +156,4 @@ Copy-Item "$env:USERPROFILE\.dsh-desktop\.credentials.yaml" $bak
 | --- | --- | --- | --- |
 | 2026-10-21 | 0.1.4 | 0.2.1-rc.2 | 支持 token 鉴权地址；内置 dsh 升至 0.2.1-rc.2，发布 v0.1.4 |
 | 2026-11-08 | 0.1.4 | 0.2.1-rc.2 | 检查：壳已最新；npm latest `0.2.2-rc.1`（2026-11-04）可用，**未升级** |
-| 2026-11-09 | 0.1.5 | 0.2.2-rc.1 | 升级内置 dsh 至 0.2.2-rc.1；生成 `dist\dsh-desktop-setup-0.1.5.exe`（278,571,561 字节）；待手动安装并发布 Release |
+| 2026-11-09 | 0.1.5 | 0.2.2-rc.1 | 升级内置 dsh 至 0.2.2-rc.1；`dist\dsh-desktop-setup-0.1.5.exe`（278,571,561 字节）已发布 [Release v0.1.5](https://github.com/h-yaqi/lingdang-dsh-ui/releases/tag/v0.1.5)，待手动安装 |
