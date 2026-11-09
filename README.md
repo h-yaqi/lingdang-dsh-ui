@@ -50,6 +50,8 @@ npm start
 
 ### dsh 发新版后，怎么让已安装的应用用上新版？
 
+> 先看当前状态：`node scripts/check-update.mjs`（只读）。完整更新规则见 [UPDATING.md](UPDATING.md)。
+
 内置 dsh 是构建时冻结的（不会自动更新）。三种方式：
 
 1. **外部覆盖（最快，无需重装应用）**：单独更新 dsh 后指给它
@@ -152,10 +154,26 @@ npm run dist
   `$env:DSH_DESKTOP_UPDATE_URL = "https://你的服务器/updates"`（需提供 `latest.yml` + 安装包 + blockmap，格式同 `dist/latest.yml`）；
 - ⚠️ 0.1.0 及更早版本**不含**更新代码，需手动安装一次 v0.1.1 后，后续版本才能自动更新。
 
+## 更新状态检查与更新规则
+
+一条命令查看「桌面壳 / 内置 dsh / 内置 Node / profile 插件」的更新状态（只读，不启动进程、不改文件）：
+
+```powershell
+node scripts/check-update.mjs
+# 机器可读：node scripts/check-update.mjs --json
+```
+
+完整规则见 **[UPDATING.md](UPDATING.md)**：部件分层、唯一版本来源、兼容配对、标准升级流程、备份回滚、验证清单、本机已知坑、发布纪律、更新记录。
+
+- 桌面壳最新版：GitHub Release `h-yaqi/lingdang-dsh-ui`
+- 内置 dsh 最新版：npm `@deepseek-ai/dsh` 的 `dist-tags.latest`（⚠️ 不要看 `dsh-base` 等散包的 latest）
+- 当前版本：壳 `0.1.5`、内置 dsh `0.2.2-rc.1`（上一版 0.1.4 内置 dsh `0.2.1-rc.2`）
+
 ## 已知限制 / 后续计划
 
-- 安装包较大（约 250MB，主要来自内置 dsh 依赖闭包；内置 dsh 0.2.1-rc.2 后约 268MB）；
+- 安装包较大（约 279MB，主要来自内置 dsh 依赖闭包；内置 dsh 0.2.2-rc.1 的 v0.1.5 安装包 278,571,561 字节）；
 - 托盘图标、系统通知、开机自启、代码签名等可作为后续迭代；
-- dsh CLI 升级：重新执行 `npm run prepare:vendor` 即可刷新内置版本（当前 vendor 内置 **0.2.1-rc.2**）；
+- dsh CLI 升级：本机没有全局 dsh，用 `npm install --prefix .\vendor\dsh --cache .\.npm-cache --ignore-scripts "@deepseek-ai/dsh@<版本>"` 拉取闭包（当前 vendor 内置 **0.2.2-rc.1**）；`prepare:vendor` 只在已有闭包时跳过、不会下载；
   若要指定某个版本的依赖树，用 `-DshRoot <含 @deepseek-ai/dsh 的 node_modules 目录>`，
   脚本检测到 `vendor/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js` 已存在时会跳过，需先移走旧目录。
+  打包时加 `--config.electronDist=node_modules/electron/dist` 可复用本地 Electron，避免联网下载超时。
